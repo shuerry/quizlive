@@ -31,18 +31,17 @@ export default function Landing() {
       >
         <p className="mb-3 text-sm uppercase tracking-widest text-muted-foreground">{APP_NAME}</p>
         <h1 className="mb-4 max-w-2xl text-4xl font-bold tracking-tight text-foreground sm:text-5xl">
-          A DeepSpace app with a static front door
+          Live class quizzes, answered on phones
         </h1>
         <p className="mb-8 max-w-md text-muted-foreground">
-          This landing page ships no auth call and no realtime connection — it's a
-          plain static page. The live app, with sign-in and synced data, lives
-          behind the link below.
+          The host starts a game and shows a join code. Students answer each timed
+          question on their phones and watch the leaderboard update after every reveal.
         </p>
         <Link
           to="/home"
           className="inline-flex items-center gap-2 rounded-full bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
         >
-          Enter the app
+          Host or join a game
         </Link>
       </div>
     </>

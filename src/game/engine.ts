@@ -446,7 +446,13 @@ async function endGame(ctx: OpContext) {
   return { ended: true }
 }
 
+/** No reads or writes: lets a client sample serverNow for clock-offset correction. */
+async function serverTime() {
+  return {}
+}
+
 export const OPS = {
+  serverTime,
   createQuiz,
   saveQuestion,
   createGame,

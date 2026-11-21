@@ -7,6 +7,12 @@
  * worker.ts). The verified id travels in a header the engine trusts; any
  * userId/hostId in the request body is ignored, because the engine never reads
  * identity from `params`.
+ *
+ * Slow work goes HERE, never in the engine: the engine runs inside the DO's
+ * blockConcurrencyWhile lock (see src/game/lock-guard.ts). AI question drafting
+ * will be its own worker action that calls the integration out here and
+ * returns drafts to the editor; only the host's final save goes through
+ * forward('saveQuestion').
  */
 
 import type { ActionHandler, ActionResult } from 'deepspace/worker'

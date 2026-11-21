@@ -1,28 +1,27 @@
-/**
- * Placeholder home page — replace this with the app's real home.
- *
- * This is intentionally unstyled scaffolding, not a design to build on.
- * Design the app's own look (layout, theme tokens, typography) from your
- * product's point of view instead of extending this page.
- */
+/** Home: host a quiz or join one. */
 
-import { useAuthProfileReady } from 'deepspace'
-import { APP_NAME } from '../../constants'
+import { Link } from 'react-router-dom'
+import { Page } from '../../components/quiz'
 
 export default function HomePage() {
-  const { isSignedIn, user } = useAuthProfileReady({ requireUser: true })
-
   return (
-    <div className="flex min-h-full flex-col items-center justify-center gap-3 bg-background px-6 text-center text-foreground">
-      <h1 className="text-2xl font-semibold">{APP_NAME}</h1>
-      <p className="max-w-md text-sm text-muted-foreground">
-        This is a placeholder page. Replace <code>src/pages/(app)/home.tsx</code>{' '}
-        with the app&apos;s real home, and give the app its own theme in{' '}
-        <code>src/themes.css</code>.
-      </p>
-      {isSignedIn && user && (
-        <p className="text-sm text-muted-foreground">Signed in as {user.name ?? user.email}</p>
-      )}
-    </div>
+    <Page className="max-w-md">
+      <h1 className="text-3xl font-black">QuizLive</h1>
+      <p className="mt-2 text-muted-foreground">Live class quizzes. Answer on your phone, watch the leaderboard move.</p>
+      <div className="mt-8 grid gap-4">
+        <Link
+          to="/play"
+          data-testid="home-join"
+          className="rounded-xl bg-primary p-6 text-primary-foreground shadow-sm transition hover:opacity-90"
+        >
+          <span className="block text-xl font-bold">Join a game</span>
+          <span className="text-sm opacity-80">Got a 6-character code? Start here.</span>
+        </Link>
+        <Link to="/quizzes" data-testid="home-host" className="rounded-xl border border-border bg-card p-6 shadow-sm transition hover:bg-accent">
+          <span className="block text-xl font-bold">Host a quiz</span>
+          <span className="text-sm text-muted-foreground">Write questions, start a game, run it live.</span>
+        </Link>
+      </div>
+    </Page>
   )
 }

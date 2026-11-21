@@ -27,6 +27,7 @@ import { runJob } from './src/jobs.js'
 import { toolsStore } from './src/game/do-store.js'
 import { runOp } from './src/game/engine.js'
 import { CALLER_HEADER, QUIZ_OP_PATH } from './src/game/protocol.js'
+import { assertInProcessToolCall, checkLockDuration } from './src/game/lock-guard.js'
 import { schemas } from './src/schemas.js'
 import { registerActionRoutes } from './src/server/action-routes.js'
 import {
@@ -65,6 +66,10 @@ export class AppRecordRoom extends RecordRoom<Env> {
    * blockConcurrencyWhile stops the DO from delivering ANY other request until
    * the op finishes, so each op's checks and writes are atomic: two submits
    * from the same user, or a submit racing the host's reveal, never interleave.
+   *
+   * NOTHING SLOW GOES INSIDE THE LOCK: no network, no AI, no timers. Read
+   * src/game/lock-guard.ts before changing anything here. Slow work (e.g. AI
+   * drafting) belongs in the worker action, before forwarding to this op.
    */
   private async runQuizOp(request: Request, op: string): Promise<Response> {
     const callerId = request.headers.get(CALLER_HEADER) ?? ''
@@ -75,10 +80,16 @@ export class AppRecordRoom extends RecordRoom<Env> {
     } catch {
       // Empty or invalid body: the op reports the missing fields.
     }
-    const store = toolsStore((req) => super.fetch(req), callerId)
+    // The store's ONLY way out: this DO's own tools handler, called in-process.
+    const store = toolsStore((req) => {
+      assertInProcessToolCall(req)
+      return super.fetch(req)
+    }, callerId)
+    const started = Date.now()
     const result = await this.state.blockConcurrencyWhile(() =>
       runOp(op, { callerId, params, store, now: () => Date.now(), newId: () => crypto.randomUUID() }),
     )
+    checkLockDuration(op, Date.now() - started)
     return Response.json(result)
   }
 }
