@@ -57,7 +57,7 @@ export function useClockOffset(): { offsetMs: number; sampled: boolean } {
 // ── Actions ─────────────────────────────────────────────────────────────────
 
 export async function callQuizAction<T = Record<string, unknown>>(
-  op: OpName,
+  op: OpName | 'draftQuestions',
   params: Record<string, unknown> = {},
 ): Promise<ActionResponse<T>> {
   const token = await getAuthToken()

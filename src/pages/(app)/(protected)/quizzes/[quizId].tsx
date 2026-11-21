@@ -20,6 +20,126 @@ interface Draft {
 
 const EMPTY: Draft = { prompt: '', choices: ['', ''], correctIndex: 0, timeLimitSec: 20 }
 
+interface AiDraft {
+  key: string
+  prompt: string
+  choices: string[]
+  correctIndex: number
+}
+
+/**
+ * "Draft with AI": paste notes → editable draft cards. Nothing is saved until
+ * the host accepts a card (which calls saveQuestion, validated again on the
+ * server). AI answer keys can be wrong, so each card must be reviewed.
+ */
+function AiDraftPanel({ quizId, ready }: { quizId: string; ready: boolean }) {
+  const [open, setOpen] = useState(false)
+  const [notes, setNotes] = useState('')
+  const [count, setCount] = useState(5)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [info, setInfo] = useState('')
+  const [drafts, setDrafts] = useState<AiDraft[]>([])
+
+  async function draft(e: FormEvent) {
+    e.preventDefault()
+    setBusy(true)
+    setError('')
+    setInfo('')
+    const r = await callQuizAction<{ drafts: Omit<AiDraft, 'key'>[]; dropped: number; remaining: number }>(
+      'draftQuestions',
+      { quizId, notes, count },
+    )
+    setBusy(false)
+    if (!r.success) return setError(r.error)
+    const stamp = Date.now()
+    setDrafts((prev) => [...prev, ...r.data.drafts.map((d, i) => ({ ...d, key: `${stamp}-${i}` }))])
+    setInfo(
+      `${r.data.drafts.length} draft${r.data.drafts.length === 1 ? '' : 's'} ready to review` +
+        (r.data.dropped ? ` (${r.data.dropped} unusable one${r.data.dropped === 1 ? ' was' : 's were'} skipped)` : '') +
+        `. ${r.data.remaining} AI draft${r.data.remaining === 1 ? '' : 's'} left this hour.`,
+    )
+  }
+
+  const remove = (key: string) => setDrafts((ds) => ds.filter((d) => d.key !== key))
+
+  if (!open) {
+    return (
+      <div className="mt-6">
+        <Button data-testid="ai-open" variant="secondary" onClick={() => setOpen(true)}>
+          ✨ Draft with AI
+        </Button>
+      </div>
+    )
+  }
+
+  return (
+    <section data-testid="ai-panel" className="mt-6 rounded-xl border border-border bg-card p-4">
+      <div className="flex items-center justify-between">
+        <h2 className="font-semibold">Draft questions with AI</h2>
+        <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
+          Close
+        </Button>
+      </div>
+      <form onSubmit={draft} className="mt-3 space-y-3">
+        <Textarea
+          data-testid="ai-notes"
+          aria-label="Lecture notes"
+          placeholder="Paste your lecture notes here…"
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          maxLength={8000}
+          rows={6}
+        />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <label className="flex items-center gap-2 text-sm">
+            Questions
+            <select
+              data-testid="ai-count"
+              aria-label="Number of questions"
+              value={count}
+              onChange={(e) => setCount(Number(e.target.value))}
+              className="h-9 rounded-md border border-input bg-background px-2"
+            >
+              {[3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span className="text-xs tabular-nums text-muted-foreground">{notes.length}/8000</span>
+        </div>
+        <Button data-testid="ai-submit" type="submit" disabled={!ready || !notes.trim() || busy} loading={busy}>
+          {busy ? 'Drafting…' : 'Draft questions'}
+        </Button>
+      </form>
+      <ErrorText>{error}</ErrorText>
+      {info && <p className="mt-2 text-sm text-muted-foreground">{info}</p>}
+
+      {drafts.length > 0 && (
+        <div className="mt-4 space-y-2">
+          <p className="text-sm text-muted-foreground">
+            Check each draft. AI can get the answer wrong. Accept saves it to the quiz.
+          </p>
+          {drafts.map((d) => (
+            <QuestionForm
+              key={d.key}
+              testId="ai-draft"
+              quizId={quizId}
+              initial={{ prompt: d.prompt, choices: d.choices, correctIndex: d.correctIndex, timeLimitSec: 20 }}
+              ready={ready}
+              saveLabel="Accept"
+              cancelLabel="Discard"
+              onDone={() => remove(d.key)}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
 export default function QuizEditorPage() {
   const { quizId = '' } = useParams()
   const navigate = useNavigate()
@@ -86,6 +206,8 @@ export default function QuizEditorPage() {
         </div>
       )}
 
+      <AiDraftPanel quizId={quizId} ready={ready} />
+
       <section className="mt-8">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">Questions ({questions.length})</h2>
@@ -146,7 +268,27 @@ export default function QuizEditorPage() {
   )
 }
 
-function QuestionForm({ quizId, initial, onDone, ready }: { quizId: string; initial: Draft; onDone: () => void; ready: boolean }) {
+function QuestionForm({
+  quizId,
+  initial,
+  onDone,
+  onCancel,
+  ready,
+  saveLabel = 'Save question',
+  cancelLabel = 'Cancel',
+  testId = 'question-form',
+}: {
+  quizId: string
+  initial: Draft
+  /** Called after a successful save. */
+  onDone: () => void
+  /** Called on Cancel / Discard (defaults to onDone). */
+  onCancel?: () => void
+  ready: boolean
+  saveLabel?: string
+  cancelLabel?: string
+  testId?: string
+}) {
   const [d, setD] = useState<Draft>(initial)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -170,7 +312,7 @@ function QuestionForm({ quizId, initial, onDone, ready }: { quizId: string; init
   }
 
   return (
-    <form data-testid="question-form" onSubmit={save} className="mt-4 space-y-4 rounded-xl border-2 border-primary/40 bg-card p-4">
+    <form data-testid={testId} onSubmit={save} className="mt-4 space-y-4 rounded-xl border-2 border-primary/40 bg-card p-4">
       <Textarea
         aria-label="Question"
         placeholder="Question"
@@ -226,10 +368,10 @@ function QuestionForm({ quizId, initial, onDone, ready }: { quizId: string; init
       <ErrorText>{error}</ErrorText>
       <div className="flex gap-2">
         <Button type="submit" disabled={!ready} loading={busy}>
-          Save question
+          {saveLabel}
         </Button>
-        <Button type="button" variant="ghost" onClick={onDone}>
-          Cancel
+        <Button type="button" variant="ghost" onClick={onCancel ?? onDone}>
+          {cancelLabel}
         </Button>
       </div>
     </form>

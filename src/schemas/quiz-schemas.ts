@@ -188,6 +188,20 @@ export const answersSchema: CollectionSchema = {
   permissions: signedIn(serverWritten('own')),
 }
 
+// ── aiDraftLog: one row per AI drafting request, for the hourly rate limit ──
+// Server-only: no client role can read or write it.
+export const aiDraftLogSchema: CollectionSchema = {
+  name: 'aiDraftLog',
+  columns: [
+    identity('userId'),
+    { name: 'quizId', storage: 'text', interpretation: 'plain', required: true, immutable: true },
+    /** Epoch ms, server clock. */
+    { name: 'at', storage: 'number', interpretation: 'plain', required: true, immutable: true },
+  ],
+  ownerField: 'userId',
+  permissions: signedIn(serverWritten(false)),
+}
+
 export const quizSchemas: CollectionSchema[] = [
   quizzesSchema,
   questionsSchema,
@@ -196,4 +210,5 @@ export const quizSchemas: CollectionSchema[] = [
   gamesSchema,
   playersSchema,
   answersSchema,
+  aiDraftLogSchema,
 ]

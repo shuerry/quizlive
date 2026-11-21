@@ -21,6 +21,9 @@ import {
   validateTitle,
 } from './scoring'
 
+const HOUR_MS = 60 * 60 * 1000
+const DRAFTS_PER_HOUR = 10
+
 // ── Store: the minimal record API the engine needs ──────────────────────────
 
 export interface Rec<T> {
@@ -446,6 +449,34 @@ async function endGame(ctx: OpContext) {
   return { ended: true }
 }
 
+/**
+ * INTERNAL (not a public action): called by the draftQuestions worker action
+ * BEFORE it calls the AI. Atomically checks that the caller hosts the quiz and
+ * is under the hourly limit, and records the attempt. The AI call itself
+ * happens afterwards in the worker, outside this lock.
+ */
+async function reserveDraft(ctx: OpContext) {
+  const quiz = await loadOwnQuiz(ctx, str(ctx.params, 'quizId'))
+  const now = ctx.now()
+  const windowStart = now - HOUR_MS
+  const mine = await ctx.store.query<{ userId: string; at: number }>('aiDraftLog', { userId: ctx.callerId })
+  const recent = mine.filter((r) => r.data.at > windowStart)
+  if (recent.length >= DRAFTS_PER_HOUR) {
+    const oldest = Math.min(...recent.map((r) => r.data.at))
+    const retryInMin = Math.max(1, Math.ceil((oldest + HOUR_MS - now) / 60_000))
+    fail('rate_limited', `You've used ${DRAFTS_PER_HOUR} AI drafts in the last hour. Try again in ${retryInMin} min.`)
+  }
+  // Keep the table small: drop this user's rows that are out of the window.
+  for (const old of mine.filter((r) => r.data.at <= windowStart)) {
+    await ctx.store.remove('aiDraftLog', old.recordId, ctx.callerId)
+  }
+  await must(
+    ctx.store.create('aiDraftLog', { userId: ctx.callerId, quizId: quiz.recordId, at: now }, ctx.callerId),
+    'record the draft request',
+  )
+  return { remaining: DRAFTS_PER_HOUR - recent.length - 1 }
+}
+
 /** No reads or writes: lets a client sample serverNow for clock-offset correction. */
 async function serverTime() {
   return {}
@@ -453,6 +484,7 @@ async function serverTime() {
 
 export const OPS = {
   serverTime,
+  reserveDraft,
   createQuiz,
   saveQuestion,
   createGame,
@@ -466,6 +498,9 @@ export const OPS = {
 
 export type OpName = keyof typeof OPS
 export const OP_NAMES = Object.keys(OPS) as OpName[]
+/** Ops only the worker may invoke; never exposed at /api/actions. */
+export const INTERNAL_OPS: readonly OpName[] = ['reserveDraft']
+export const PUBLIC_OP_NAMES = OP_NAMES.filter((op) => !INTERNAL_OPS.includes(op))
 
 /** Never throws (a throw inside blockConcurrencyWhile resets the DO). */
 export async function runOp(name: string, ctx: OpContext): Promise<OpResult> {

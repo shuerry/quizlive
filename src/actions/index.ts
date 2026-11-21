@@ -9,32 +9,43 @@
  * identity from `params`.
  *
  * Slow work goes HERE, never in the engine: the engine runs inside the DO's
- * blockConcurrencyWhile lock (see src/game/lock-guard.ts). AI question drafting
- * will be its own worker action that calls the integration out here and
- * returns drafts to the editor; only the host's final save goes through
- * forward('saveQuestion').
+ * blockConcurrencyWhile lock (see src/game/lock-guard.ts). draftQuestions is
+ * the example: the AI call happens in this worker action, and only the host's
+ * later saveQuestion goes through the lock.
  */
 
 import type { ActionHandler, ActionResult } from 'deepspace/worker'
 import type { Env } from '../../worker'
-import { OP_NAMES } from '../game/engine'
+import { PUBLIC_OP_NAMES, type OpName } from '../game/engine'
 import { CALLER_HEADER, QUIZ_OP_PATH } from '../game/protocol'
+import { runDraftQuestions } from './draft'
 
-function forward(op: string): ActionHandler<Env> {
-  return async ({ userId, params, env }) => {
-    const stub = env.RECORD_ROOMS.get(env.RECORD_ROOMS.idFromName(`app:${env.DEEPSPACE_APP_ID}`))
-    const res = await stub.fetch(
-      new Request(`https://internal${QUIZ_OP_PATH}${op}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', [CALLER_HEADER]: userId },
-        body: JSON.stringify(params ?? {}),
-      }),
-    )
-    // { success, data | error, code, serverNow }
-    return (await res.json()) as ActionResult
-  }
+async function callOp(env: Env, userId: string, op: OpName, params: Record<string, unknown>) {
+  const stub = env.RECORD_ROOMS.get(env.RECORD_ROOMS.idFromName(`app:${env.DEEPSPACE_APP_ID}`))
+  const res = await stub.fetch(
+    new Request(`https://internal${QUIZ_OP_PATH}${op}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', [CALLER_HEADER]: userId },
+      body: JSON.stringify(params ?? {}),
+    }),
+  )
+  // { success, data | error, code, serverNow }
+  return (await res.json()) as ActionResult & { serverNow: number }
 }
 
-export const actions: Record<string, ActionHandler<Env>> = Object.fromEntries(
-  OP_NAMES.map((op) => [op, forward(op)]),
-)
+function forward(op: OpName): ActionHandler<Env> {
+  return ({ userId, params, env }) => callOp(env, userId, op, params)
+}
+
+const draftQuestions: ActionHandler<Env> = async ({ userId, params, env, tools }) =>
+  (await runDraftQuestions(params, {
+    reserve: (quizId) =>
+      callOp(env, userId, 'reserveDraft', { quizId }) as ReturnType<Parameters<typeof runDraftQuestions>[1]['reserve']>,
+    callModel: (body) => tools.integration('anthropic/chat-completion', body),
+    log: (m) => console.warn(m),
+  })) as ActionResult
+
+export const actions: Record<string, ActionHandler<Env>> = {
+  ...Object.fromEntries(PUBLIC_OP_NAMES.map((op) => [op, forward(op)])),
+  draftQuestions,
+}
