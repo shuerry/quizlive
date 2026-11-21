@@ -81,6 +81,38 @@ export async function callQuizAction<T = Record<string, unknown>>(
   }
 }
 
+/** Upload a PDF/.txt and get AI drafts back. The server keeps nothing. */
+export async function draftFromFile<T = Record<string, unknown>>(
+  file: File,
+  quizId: string,
+  count: number,
+): Promise<ActionResponse<T>> {
+  const token = await getAuthToken()
+  if (!token) return { success: false, code: 'unauthorized', error: 'Sign in first' }
+  const form = new FormData()
+  form.append('quizId', quizId)
+  form.append('count', String(count))
+  form.append('file', file, file.name)
+  const sentAt = Date.now()
+  try {
+    const res = await fetch('/api/quiz/draft-from-file', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+    })
+    const receivedAt = Date.now()
+    const body = (await res.json().catch(() => null)) as ActionResponse<T> | { error?: string } | null
+    if (body && 'serverNow' in body && typeof body.serverNow === 'number') {
+      // The upload time inflates this round trip; recordClockSample keeps the best sample.
+      recordClockSample(body.serverNow, sentAt, receivedAt)
+    }
+    if (body && 'success' in body) return body
+    return { success: false, code: `http_${res.status}`, error: body?.error ?? `Upload failed (${res.status})` }
+  } catch {
+    return { success: false, code: 'network', error: 'Upload failed. Check your connection and try again.' }
+  }
+}
+
 /**
  * Actions are usable once the user is signed in AND the records room is
  * connected (results of an action arrive through the room's live queries).

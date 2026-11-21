@@ -6,7 +6,7 @@ import { useQuery } from 'deepspace'
 import { Button, Input, Textarea, cn } from '@/components/ui'
 import { CHOICE_STYLES, ErrorText, Page } from '../../../../components/quiz'
 import type { AnswerKey, Game, Question, Quiz } from '../../../../game/engine'
-import { callQuizAction, useActionsReady } from '../../../../lib/quiz-client'
+import { callQuizAction, draftFromFile, useActionsReady } from '../../../../lib/quiz-client'
 
 const TIME_OPTIONS = [10, 20, 30, 45, 60, 90]
 
@@ -25,6 +25,21 @@ interface AiDraft {
   prompt: string
   choices: string[]
   correctIndex: number
+  /** "Source: lecture3.pdf (first 8,000 characters used)" for file drafts. */
+  source?: string
+}
+
+interface DraftResponse {
+  drafts: Omit<AiDraft, 'key' | 'source'>[]
+  dropped: number
+  remaining: number
+  source?: { name: string; truncated: boolean; pages?: number; pagesRead?: number }
+}
+
+const MAX_UPLOAD_MB = 10
+
+function sourceLabel(src: NonNullable<DraftResponse['source']>): string {
+  return `Source: ${src.name}${src.truncated ? ' (first 8,000 characters used)' : ''}`
 }
 
 /**
@@ -40,26 +55,38 @@ function AiDraftPanel({ quizId, ready }: { quizId: string; ready: boolean }) {
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
   const [drafts, setDrafts] = useState<AiDraft[]>([])
+  const [mode, setMode] = useState<'paste' | 'file'>('paste')
+  const [file, setFile] = useState<File | null>(null)
 
   async function draft(e: FormEvent) {
     e.preventDefault()
-    setBusy(true)
     setError('')
     setInfo('')
-    const r = await callQuizAction<{ drafts: Omit<AiDraft, 'key'>[]; dropped: number; remaining: number }>(
-      'draftQuestions',
-      { quizId, notes, count },
-    )
+    if (mode === 'file') {
+      if (!file) return setError('Choose a PDF or .txt file first')
+      // A quick hint only; the server checks the size and the real file type.
+      if (file.size > MAX_UPLOAD_MB * 1024 * 1024) {
+        return setError(`That file is over ${MAX_UPLOAD_MB} MB. Upload a smaller PDF or paste the text.`)
+      }
+    }
+    setBusy(true)
+    const r =
+      mode === 'file' && file
+        ? await draftFromFile<DraftResponse>(file, quizId, count)
+        : await callQuizAction<DraftResponse>('draftQuestions', { quizId, notes, count })
     setBusy(false)
     if (!r.success) return setError(r.error)
     const stamp = Date.now()
-    setDrafts((prev) => [...prev, ...r.data.drafts.map((d, i) => ({ ...d, key: `${stamp}-${i}` }))])
+    const source = r.data.source ? sourceLabel(r.data.source) : undefined
+    setDrafts((prev) => [...prev, ...r.data.drafts.map((d, i) => ({ ...d, source, key: `${stamp}-${i}` }))])
     setInfo(
       `${r.data.drafts.length} draft${r.data.drafts.length === 1 ? '' : 's'} ready to review` +
         (r.data.dropped ? ` (${r.data.dropped} unusable one${r.data.dropped === 1 ? ' was' : 's were'} skipped)` : '') +
         `. ${r.data.remaining} AI draft${r.data.remaining === 1 ? '' : 's'} left this hour.`,
     )
   }
+
+  const canSubmit = mode === 'file' ? !!file : !!notes.trim()
 
   const remove = (key: string) => setDrafts((ds) => ds.filter((d) => d.key !== key))
 
@@ -81,16 +108,59 @@ function AiDraftPanel({ quizId, ready }: { quizId: string; ready: boolean }) {
           Close
         </Button>
       </div>
+      <div role="tablist" aria-label="Notes source" className="mt-3 inline-flex rounded-lg bg-muted p-1 text-sm">
+        {(['paste', 'file'] as const).map((m) => (
+          <button
+            key={m}
+            type="button"
+            role="tab"
+            data-testid={`ai-mode-${m}`}
+            aria-selected={mode === m}
+            onClick={() => {
+              setMode(m)
+              setError('')
+            }}
+            className={cn('rounded-md px-3 py-1.5', mode === m ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground')}
+          >
+            {m === 'paste' ? 'Paste notes' : 'Upload a file'}
+          </button>
+        ))}
+      </div>
       <form onSubmit={draft} className="mt-3 space-y-3">
-        <Textarea
-          data-testid="ai-notes"
-          aria-label="Lecture notes"
-          placeholder="Paste your lecture notes here…"
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          maxLength={8000}
-          rows={6}
-        />
+        {mode === 'paste' ? (
+          <Textarea
+            data-testid="ai-notes"
+            aria-label="Lecture notes"
+            placeholder="Paste your lecture notes here…"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            maxLength={8000}
+            rows={6}
+          />
+        ) : (
+          <div className="rounded-lg border border-dashed border-border p-4">
+            <input
+              data-testid="ai-file"
+              type="file"
+              aria-label="Notes file"
+              accept=".pdf,.txt,application/pdf,text/plain"
+              onChange={(e) => {
+                setFile(e.target.files?.[0] ?? null)
+                setError('')
+              }}
+              className="block w-full text-sm file:mr-3 file:rounded-md file:border-0 file:bg-secondary file:px-3 file:py-2 file:text-sm file:font-medium"
+            />
+            <p className="mt-2 text-xs text-muted-foreground">
+              PDF or .txt, up to {MAX_UPLOAD_MB} MB. The first 8,000 characters are used. The file isn&apos;t stored.
+              Word or PowerPoint? Export it as a PDF first.
+            </p>
+            {file && (
+              <p data-testid="ai-file-name" className="mt-1 text-sm">
+                {file.name} ({file.size < 1024 * 1024 ? `${Math.max(1, Math.round(file.size / 1024))} KB` : `${(file.size / 1024 / 1024).toFixed(1)} MB`})
+              </p>
+            )}
+          </div>
+        )}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <label className="flex items-center gap-2 text-sm">
             Questions
@@ -108,10 +178,10 @@ function AiDraftPanel({ quizId, ready }: { quizId: string; ready: boolean }) {
               ))}
             </select>
           </label>
-          <span className="text-xs tabular-nums text-muted-foreground">{notes.length}/8000</span>
+          {mode === 'paste' && <span className="text-xs tabular-nums text-muted-foreground">{notes.length}/8000</span>}
         </div>
-        <Button data-testid="ai-submit" type="submit" disabled={!ready || !notes.trim() || busy} loading={busy}>
-          {busy ? 'Drafting…' : 'Draft questions'}
+        <Button data-testid="ai-submit" type="submit" disabled={!ready || !canSubmit || busy} loading={busy}>
+          {busy ? (mode === 'file' ? 'Reading file and drafting…' : 'Drafting…') : 'Draft questions'}
         </Button>
       </form>
       <ErrorText>{error}</ErrorText>
@@ -123,16 +193,22 @@ function AiDraftPanel({ quizId, ready }: { quizId: string; ready: boolean }) {
             Check each draft. AI can get the answer wrong. Accept saves it to the quiz.
           </p>
           {drafts.map((d) => (
-            <QuestionForm
-              key={d.key}
-              testId="ai-draft"
-              quizId={quizId}
-              initial={{ prompt: d.prompt, choices: d.choices, correctIndex: d.correctIndex, timeLimitSec: 20 }}
-              ready={ready}
-              saveLabel="Accept"
-              cancelLabel="Discard"
-              onDone={() => remove(d.key)}
-            />
+            <div key={d.key} data-testid="ai-draft-card">
+              {d.source && (
+                <p data-testid="ai-draft-source" className="mt-4 text-xs font-medium text-muted-foreground">
+                  {d.source}
+                </p>
+              )}
+              <QuestionForm
+                testId="ai-draft"
+                quizId={quizId}
+                initial={{ prompt: d.prompt, choices: d.choices, correctIndex: d.correctIndex, timeLimitSec: 20 }}
+                ready={ready}
+                saveLabel="Accept"
+                cancelLabel="Discard"
+                onDone={() => remove(d.key)}
+              />
+            </div>
           ))}
         </div>
       )}

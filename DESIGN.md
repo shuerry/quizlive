@@ -75,8 +75,17 @@ How the table maps onto the SDK (`src/schemas/quiz-schemas.ts`):
   `answer` is only a check and is not kept.
 - Drafts land in the editor, **not** straight into a game. The host reviews them,
   because AI-written answer keys can be wrong.
-- It runs in the worker with the key in `deepspace secrets`. If it fails, the host can still
-  write questions by hand.
+- It runs in the worker, outside the DO lock, using `anthropic/chat-completion` with
+  `claude-haiku-5-5`. That integration is billed through DeepSpace to the app owner, so there's no API
+  key. Limit: 10 drafts per user per hour. If it fails, the host can still write questions by hand.
+- **From a file:** the host can upload a PDF or .txt (max 10 MB) instead of pasting notes.
+  - The type is taken from the file's bytes, not its name. Word and PowerPoint files are told to export as a PDF.
+  - The text is extracted in the worker (`unpdf` for PDFs), stopping at 8,000 characters and after at
+    most 60 pages. It then goes through the same drafting pipeline, and each draft shows "Source: <file>".
+  - Extraction happens before the rate-limit slot is reserved, so an unreadable file costs nothing.
+    Scanned, empty and corrupt files get specific messages.
+  - The file is never stored. On the deployed worker, a 10 MB, 2,252-page PDF took about 1 s round trip
+    (stopping early); reading all of it took about 6 s.
 
 ## Integrations
 - **Auth + real-time records:** the whole game
