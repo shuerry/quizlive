@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { buildDraftRequest, DRAFT_MODEL, extractText, NOTES_MAX, parseDrafts, validateDraftRequest } from './drafts'
 
-const q = (n: number, correctIndex = n % 4) => ({
-  prompt: `Question ${n}?`,
-  choices: [`a${n}`, `b${n}`, `c${n}`, `d${n}`],
-  correctIndex,
-})
+/** A model item (with the "answer" consistency field). */
+const q = (n: number, correctIndex = n % 4) => {
+  const choices = [`a${n}`, `b${n}`, `c${n}`, `d${n}`]
+  return { prompt: `Question ${n}?`, choices, correctIndex, answer: choices[correctIndex] }
+}
+/** What a draft looks like after parsing: same, without "answer". */
+const d = ({ answer: _answer, ...rest }: ReturnType<typeof q>) => rest
 const anthropic = (text: string) => ({
   id: 'msg_1',
   type: 'message',
@@ -17,16 +19,16 @@ const anthropic = (text: string) => ({
 describe('parseDrafts: good output', () => {
   it('parses a clean JSON array', () => {
     const r = parseDrafts(JSON.stringify([q(1), q(2), q(3)]))
-    expect(r).toEqual({ drafts: [q(1), q(2), q(3)], dropped: [], malformed: false })
+    expect(r).toEqual({ drafts: [d(q(1)), d(q(2)), d(q(3))], dropped: [], malformed: false })
   })
 
   it('reads the text out of an Anthropic Messages response', () => {
     const text = extractText(anthropic(JSON.stringify([q(1)])))
-    expect(parseDrafts(text).drafts).toEqual([q(1)])
+    expect(parseDrafts(text).drafts).toEqual([d(q(1))])
   })
 
   it('trims whitespace inside fields', () => {
-    const r = parseDrafts(JSON.stringify([{ prompt: '  Why? ', choices: [' a', 'b ', ' c ', 'd'], correctIndex: 0 }]))
+    const r = parseDrafts(JSON.stringify([{ prompt: '  Why? ', choices: [' a', 'b ', ' c ', 'd'], correctIndex: 0, answer: ' A ' }]))
     expect(r.drafts[0]).toEqual({ prompt: 'Why?', choices: ['a', 'b', 'c', 'd'], correctIndex: 0 })
   })
 })
@@ -47,7 +49,7 @@ describe('parseDrafts: junk around the JSON', () => {
   it('recovers whole objects from a truncated array', () => {
     const text = '[' + JSON.stringify(q(1)) + ',' + JSON.stringify(q(2)) + ',{"prompt":"Cut off mid'
     const r = parseDrafts(text)
-    expect(r.drafts).toEqual([q(1), q(2)])
+    expect(r.drafts).toEqual([d(q(1)), d(q(2))])
   })
 })
 
@@ -92,7 +94,7 @@ describe('parseDrafts: partially invalid output', () => {
       q(13),
     ]
     const r = parseDrafts(JSON.stringify(items))
-    expect(r.drafts).toEqual([q(1), q(13)])
+    expect(r.drafts).toEqual([d(q(1)), d(q(13))])
     expect(r.dropped.map((d) => d.index)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])
     expect(r.dropped.find((d) => d.index === 5)?.reason).toMatch(/correctIndex/)
     expect(r.dropped.find((d) => d.index === 9)?.reason).toMatch(/300/)
@@ -106,6 +108,44 @@ describe('parseDrafts: partially invalid output', () => {
     const r = parseDrafts(JSON.stringify([q(1), q(2), q(3), q(4), q(5)]), 3)
     expect(r.drafts).toHaveLength(3)
     expect(r.dropped).toHaveLength(2)
+  })
+})
+
+describe('answer-text consistency check', () => {
+  // The real failure seen in testing: right question, key on the wrong choice.
+  const chlorophyll = {
+    prompt: 'Which pigment, found in chloroplasts, is named in the lecture as part of photosynthesis?',
+    choices: ['Melanin', 'Carotene', 'Chlorophyll', 'Hemoglobin'],
+  }
+
+  it('drops an item whose correctIndex points away from its stated answer', () => {
+    const r = parseDrafts(JSON.stringify([{ ...chlorophyll, correctIndex: 3, answer: 'Chlorophyll' }]))
+    expect(r.drafts).toEqual([])
+    expect(r.dropped).toEqual([{ index: 0, reason: 'answer text is choice 2, but correctIndex is 3' }])
+  })
+
+  it('keeps it when index and text agree (case and spacing ignored)', () => {
+    const r = parseDrafts(JSON.stringify([{ ...chlorophyll, correctIndex: 2, answer: '  chlorophyll ' }]))
+    expect(r.drafts).toEqual([{ ...chlorophyll, correctIndex: 2 }])
+  })
+
+  it.each([
+    ['missing', undefined, 'missing answer text'],
+    ['empty', '  ', 'missing answer text'],
+    ['not text', 2, 'missing answer text'],
+    ['not one of the choices', 'Chlorophyll a', 'answer text matches no choice'],
+  ])('drops an item whose answer is %s', (_n, answer, reason) => {
+    const r = parseDrafts(JSON.stringify([{ ...chlorophyll, correctIndex: 2, answer }]))
+    expect(r.drafts).toEqual([])
+    expect(r.dropped[0].reason).toBe(reason)
+  })
+
+  it('the parsed draft never carries the answer field', () => {
+    expect(Object.keys(parseDrafts(JSON.stringify([q(1)])).drafts[0]).sort()).toEqual(['choices', 'correctIndex', 'prompt'])
+  })
+
+  it('the prompt asks for the answer field', () => {
+    expect(buildDraftRequest('n', 3).system).toMatch(/"answer" repeats the correct choice's text exactly/)
   })
 })
 

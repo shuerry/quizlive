@@ -68,8 +68,11 @@ How the table maps onto the SDK (`src/schemas/quiz-schemas.ts`):
 
 ## AI question drafting
 - Input: pasted notes (capped at ~8k characters) and a number of questions (3–10).
-- Output: strict JSON `[{prompt, choices[4], correctIndex}]`, checked before
-  saving (4 non-empty, distinct choices; index between 0 and 3). Invalid items are dropped.
+- Output: strict JSON `[{prompt, choices[4], correctIndex, answer}]`, checked before
+  it reaches the editor: prompt of 300 characters or fewer; 4 non-empty, distinct choices; index between 0 and 3; and
+  `answer` (the correct choice's text) must equal `choices[correctIndex]`. That last check exists because a
+  real test draft put the key on "Hemoglobin" for a chlorophyll question. Invalid items are dropped;
+  `answer` is only a check and is not kept.
 - Drafts land in the editor, **not** straight into a game. The host reviews them,
   because AI-written answer keys can be wrong.
 - It runs in the worker with the key in `deepspace secrets`. If it fails, the host can still

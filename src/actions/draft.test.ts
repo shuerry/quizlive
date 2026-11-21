@@ -6,7 +6,11 @@ import { runDraftQuestions, type DraftDeps } from './draft'
 
 const HOST = 'user-host'
 const OTHER = 'user-other'
-const q = (n: number) => ({ prompt: `Q${n}?`, choices: ['a', 'b', 'c', 'd'], correctIndex: n % 4 })
+const q = (n: number) => {
+  const choices = ['a', 'b', 'c', 'd']
+  return { prompt: `Q${n}?`, choices, correctIndex: n % 4, answer: choices[n % 4] }
+}
+const d = ({ answer: _answer, ...rest }: ReturnType<typeof q>) => rest
 const anthropic = (text: string) => ({ content: [{ type: 'text', text }] })
 
 let store: MemoryStore
@@ -40,7 +44,7 @@ describe('draftQuestions (mocked integration)', () => {
   it('returns validated drafts and saves nothing', async () => {
     const model = vi.fn(ok(JSON.stringify([q(1), q(2), q(3)])))
     const r = await runDraftQuestions({ quizId, notes: 'Mitochondria make ATP.', count: 3 }, deps(HOST, model))
-    expect(r).toMatchObject({ success: true, data: { drafts: [q(1), q(2), q(3)], dropped: 0, remaining: DRAFTS_PER_HOUR - 1 } })
+    expect(r).toMatchObject({ success: true, data: { drafts: [d(q(1)), d(q(2)), d(q(3))], dropped: 0, remaining: DRAFTS_PER_HOUR - 1 } })
     expect(model).toHaveBeenCalledOnce()
     expect(model.mock.calls[0][0]).toMatchObject({ model: 'claude-haiku-5-5' })
     expect(store.all('questions')).toHaveLength(0)
@@ -50,7 +54,7 @@ describe('draftQuestions (mocked integration)', () => {
   it('drops invalid items and reports how many', async () => {
     const text = '```json\n' + JSON.stringify([q(1), { ...q(2), correctIndex: 9 }, { ...q(3), choices: ['a', 'a', 'b', 'c'] }]) + '\n```'
     const r = await runDraftQuestions({ quizId, notes: 'n', count: 3 }, deps(HOST, ok(text)))
-    expect(r).toMatchObject({ success: true, data: { drafts: [q(1)], dropped: 2 } })
+    expect(r).toMatchObject({ success: true, data: { drafts: [d(q(1))], dropped: 2 } })
   })
 
   it('malformed output → friendly error, nothing saved', async () => {
