@@ -21,14 +21,30 @@ answer timed questions, and watch the leaderboard update after each one.
 | collection | fields | who can read |
 |---|---|---|
 | quizzes | title, hostId | host |
-| questions | quizId, order, prompt, choices[2–4], timeLimitSec | host; players only once the question is live |
-| **answerKeys** | questionId, correctIndex | **host only, ever** |
-| games | quizId, hostId, code, state (`lobby`/`question`/`reveal`/`ended`), currentIndex, startedAt, endsAt, revealedIndex | everyone in the game |
+| questions | quizId, order, prompt, choices[2–4], timeLimitSec, hostId | host; players see the live one via `games.currentQuestion` |
+| **answerKeys** | questionId, correctIndex, hostId | **host only, ever** |
+| games | quizId, hostId, code, state (`lobby`/`question`/`reveal`/`ended`), currentIndex, startedAt, endsAt, revealedIndex (correct choice, -1 until reveal), teamId, currentQuestion (never the answer), answeredCount | everyone in the game |
 | players | gameId, userId, nickname, score | everyone in the game |
-| answers | gameId, questionId, userId, choice, receivedAt, points | own answer only; totals for host |
+| answers | gameId, questionId, userId, choice, receivedAt, points | own answer only; totals for host via `games.answeredCount` |
+| team_members | teamId (= game id), userId, status | own rows; written by the server on create/join |
 
 The correct answer lives in a **separate host-only collection**. If it sat on the
 question record, any player could find it in the network tab before answering.
+
+How the table maps onto the SDK (`src/schemas/quiz-schemas.ts`):
+- Only `quizzes` takes client writes. Everything else is written by server actions.
+  `hostId`/`userId` are `userBound` + `immutable`, so the Durable Object stamps the
+  verified caller on create. `admin` gets exactly the `member` rules, because the app
+  owner is automatically an admin and would otherwise see every answer key.
+- **Live question:** the SDK can't gate one collection's reads on another's state, so
+  `questions` is host-only. When a question starts, the worker copies its prompt, choices and
+  time limit (never `correctIndex`) into `games.currentQuestion`. The correct choice reaches players only through `games.revealedIndex`, which is set at reveal.
+- **Answer totals:** answers are own-only, so the worker keeps `games.answeredCount`.
+  Players in the game can see the count too (never the choices). This is intentional.
+- **"Everyone in the game"** uses the SDK's `team` level, which reads a
+  `team_members` collection (teamId = game id). The SDK's "membership changed"
+  refresh hook doesn't fire (in deepspace 0.44.2 it reads `data.UserId`), so player screens
+  open their game subscriptions only after the join action returns.
 
 ## Server-side rules (the technical depth)
 - **The server owns the clock.** Starting a question sets `startedAt` and `endsAt` from
@@ -43,6 +59,12 @@ question record, any player could find it in the network tab before answering.
 - Only the host can move the game forward (start, reveal, next, end). Player and host IDs
   always come from the verified JWT.
 - Join codes are random, and a code stops working after the game ends.
+- **Every game op is atomic.** A worker action verifies the JWT and forwards the op
+  to the record Durable Object. The engine (`src/game/engine.ts`) runs there inside
+  `state.blockConcurrencyWhile`, so no other request is handled until the op finishes.
+  Without it, each `tools.*` call would be a separate request, and two submits could
+  interleave between the check and the write. `uniqueOn [gameId, questionId, userId]`
+  on `answers` is a second guard. Every response includes `serverNow` for clock-offset correction.
 
 ## AI question drafting
 - Input: pasted notes (capped at ~8k characters) and a number of questions (3–10).

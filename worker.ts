@@ -24,6 +24,9 @@ import { registerAgent } from './src/ai/agent.js'
 import { buildTools } from './src/ai/tools.js'
 import { tasks as cronTasks, runTask as runCronTask } from './src/cron.js'
 import { runJob } from './src/jobs.js'
+import { toolsStore } from './src/game/do-store.js'
+import { runOp } from './src/game/engine.js'
+import { CALLER_HEADER, QUIZ_OP_PATH } from './src/game/protocol.js'
 import { schemas } from './src/schemas.js'
 import { registerActionRoutes } from './src/server/action-routes.js'
 import {
@@ -47,6 +50,36 @@ export const __DO_MANIFEST__ = [
 export class AppRecordRoom extends RecordRoom<Env> {
   constructor(state: DurableObjectState, env: Env) {
     super(state, env, schemas, { ownerUserId: env.OWNER_USER_ID })
+  }
+
+  override async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url)
+    if (request.method === 'POST' && url.pathname.startsWith(QUIZ_OP_PATH)) {
+      return this.runQuizOp(request, url.pathname.slice(QUIZ_OP_PATH.length))
+    }
+    return super.fetch(request)
+  }
+
+  /**
+   * Game ops (src/game/engine.ts) run here, inside the DO, one at a time.
+   * blockConcurrencyWhile stops the DO from delivering ANY other request until
+   * the op finishes, so each op's checks and writes are atomic: two submits
+   * from the same user, or a submit racing the host's reveal, never interleave.
+   */
+  private async runQuizOp(request: Request, op: string): Promise<Response> {
+    const callerId = request.headers.get(CALLER_HEADER) ?? ''
+    let params: Record<string, unknown> = {}
+    try {
+      const body: unknown = await request.json()
+      if (body && typeof body === 'object' && !Array.isArray(body)) params = body as Record<string, unknown>
+    } catch {
+      // Empty or invalid body: the op reports the missing fields.
+    }
+    const store = toolsStore((req) => super.fetch(req), callerId)
+    const result = await this.state.blockConcurrencyWhile(() =>
+      runOp(op, { callerId, params, store, now: () => Date.now(), newId: () => crypto.randomUUID() }),
+    )
+    return Response.json(result)
   }
 }
 
