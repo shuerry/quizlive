@@ -76,10 +76,10 @@ export default function HostGamePage() {
           <p className="mt-8 text-left text-sm font-medium">
             Players ({players.length})
           </p>
-          <ul data-testid="lobby-players" className="mt-2 flex min-h-12 flex-wrap gap-2">
+          <ul data-testid="lobby-players" className="mt-2 flex min-h-12 flex-wrap content-start items-start gap-2">
             {players.length === 0 && <li className="text-sm text-muted-foreground">Waiting for players to join…</li>}
             {players.map((p) => (
-              <li key={p.userId} className="rounded-full bg-secondary px-3 py-1 text-sm font-medium">
+              <li key={p.userId} className="inline-flex h-8 items-center rounded-full bg-secondary px-3 text-sm font-medium leading-none">
                 {p.nickname}
               </li>
             ))}

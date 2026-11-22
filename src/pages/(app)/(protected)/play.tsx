@@ -202,7 +202,7 @@ function PlayerGame({ gameId, nickname, onLeave }: Joined & { onLeave: () => voi
           </p>
           <ul className="mt-8 flex flex-wrap justify-center gap-2">
             {players.map((p) => (
-              <li key={p.userId} className="rounded-full bg-secondary px-3 py-1 text-sm">
+              <li key={p.userId} className="inline-flex h-8 items-center rounded-full bg-secondary px-3 text-sm leading-none">
                 {p.nickname}
               </li>
             ))}
