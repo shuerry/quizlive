@@ -50,12 +50,27 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | typeof TIMEOUT> 
 
 const FRIENDLY_AI_ERROR = "The AI couldn't draft questions right now. Try again, or add questions by hand."
 
-export async function runDraftQuestions(params: Record<string, unknown>, deps: DraftDeps): Promise<DraftResult> {
+/**
+ * Server-side options for the file path. NOT read from the request: a client
+ * can't widen the notes limit or inject source names through draftQuestions.
+ */
+export interface DraftOptions {
+  /** Uploaded filenames; asks the model for a per-question "source". */
+  sources?: string[]
+  /** Notes limit including the <file> wrappers (default 8000). */
+  notesMax?: number
+}
+
+export async function runDraftQuestions(
+  params: Record<string, unknown>,
+  deps: DraftDeps,
+  opts: DraftOptions = {},
+): Promise<DraftResult> {
   const log = deps.log ?? (() => {})
   const quizId = typeof params.quizId === 'string' ? params.quizId : ''
   if (!quizId) return { success: false, code: 'bad_request', error: 'Missing quizId' }
 
-  const input = validateDraftRequest(params)
+  const input = validateDraftRequest(params, opts.notesMax)
   if (!input.ok) return { success: false, code: 'invalid', error: input.error }
 
   // Ownership + rate limit (inside the DO lock, fast).
@@ -65,7 +80,7 @@ export async function runDraftQuestions(params: Record<string, unknown>, deps: D
   // The slow part, outside the lock.
   let result: Awaited<ReturnType<DraftDeps['callModel']>> | typeof TIMEOUT
   try {
-    result = await withTimeout(deps.callModel(buildDraftRequest(input.notes, input.count)), deps.timeoutMs ?? DRAFT_TIMEOUT_MS)
+    result = await withTimeout(deps.callModel(buildDraftRequest(input.notes, input.count, opts.sources)), deps.timeoutMs ?? DRAFT_TIMEOUT_MS)
   } catch (err) {
     log(`[draft] model call threw: ${err instanceof Error ? err.message : String(err)}`)
     return { success: false, code: 'ai_failed', error: FRIENDLY_AI_ERROR, serverNow: reserved.serverNow }
@@ -88,7 +103,7 @@ export async function runDraftQuestions(params: Record<string, unknown>, deps: D
     return { success: false, code: 'ai_failed', error, serverNow: reserved.serverNow }
   }
 
-  const parsed = parseDrafts(extractText(result.data), input.count)
+  const parsed = parseDrafts(extractText(result.data), input.count, opts.sources)
   if (parsed.dropped.length) log(`[draft] dropped ${parsed.dropped.length}: ${JSON.stringify(parsed.dropped)}`)
   if (parsed.drafts.length === 0) {
     return {

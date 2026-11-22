@@ -81,9 +81,9 @@ export async function callQuizAction<T = Record<string, unknown>>(
   }
 }
 
-/** Upload a PDF/.txt and get AI drafts back. The server keeps nothing. */
-export async function draftFromFile<T = Record<string, unknown>>(
-  file: File,
+/** Upload up to 3 PDF/.txt files and get AI drafts back. The server keeps nothing. */
+export async function draftFromFiles<T = Record<string, unknown>>(
+  files: File[],
   quizId: string,
   count: number,
 ): Promise<ActionResponse<T>> {
@@ -92,7 +92,7 @@ export async function draftFromFile<T = Record<string, unknown>>(
   const form = new FormData()
   form.append('quizId', quizId)
   form.append('count', String(count))
-  form.append('file', file, file.name)
+  for (const file of files) form.append('file', file, file.name)
   const sentAt = Date.now()
   try {
     const res = await fetch('/api/quiz/draft-from-file', {

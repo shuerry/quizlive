@@ -1,7 +1,7 @@
 # QuizLive
 
 QuizLive is a live multiple-choice quiz for classrooms, built on [DeepSpace](https://docs.deep.space).
-A host writes questions, or has AI draft them from pasted notes or an uploaded PDF, then starts a game.
+A host writes questions, or has AI draft them from pasted notes or up to three uploaded PDF/text files, then starts a game.
 Students join on their phones with a 6-character code and answer timed questions. Everyone watches the
 leaderboard update after each reveal. The server owns the clock, the answer keys and the scoring, so the
 results can be trusted. When the game ends, the host gets a results summary by email.
@@ -58,9 +58,13 @@ scripted players for a hosted game. See the header of each file for how to run i
     `choices[correctIndex]`, or the item is dropped.
   - Drafts come back for the host to review; nothing is saved until the host accepts it.
 - **PDF/TXT upload** (`src/server/upload-routes.ts`, `src/game/file-text.ts`)
-  - Up to 10 MB. The type is taken from the file's bytes, not its name.
-  - Text is extracted in memory with `unpdf`, stopping at 8,000 characters and after at most 60 pages.
-    The file is never stored.
+  - Up to 3 files and 10 MB in total. Each file's type is taken from its bytes, not its name, and one bad
+    file rejects the whole request with that file named.
+  - Text is extracted in memory with `unpdf` (at most 60 pages per PDF). The 8,000-character budget is shared
+    across the files, and a short file keeps all of its text.
+  - One AI call and one rate-limit slot per request. Each file is a labelled section in the prompt, and every
+    draft shows which file it came from.
+  - Files are never stored.
   - Extraction happens before the rate-limit slot is reserved. Scanned, empty and corrupt files get
     clear messages.
 - **Results email** (`src/actions/results-email.ts`, `src/game/results-email.ts`)

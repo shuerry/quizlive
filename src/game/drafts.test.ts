@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildDraftRequest, DRAFT_MODEL, extractText, NOTES_MAX, parseDrafts, validateDraftRequest } from './drafts'
+import { buildDraftRequest, buildFileNotes, DRAFT_MODEL, extractText, NOTES_MAX, parseDrafts, validateDraftRequest } from './drafts'
 
 /** A model item (with the "answer" consistency field). */
 const q = (n: number, correctIndex = n % 4) => {
@@ -167,5 +167,35 @@ describe('request building and input limits', () => {
       expect(validateDraftRequest({ notes: 'notes', count }).ok, String(count)).toBe(false)
     }
     expect(validateDraftRequest({ notes: 'notes', count: 10 }).ok).toBe(true)
+  })
+})
+
+describe('sources for file drafts', () => {
+  const item = (source?: unknown) => ({ ...q(1), ...(source === undefined ? {} : { source }) })
+  const names = ['week1.pdf', 'week 2.txt']
+
+  it('keeps a source that matches an uploaded name (case-insensitive)', () => {
+    expect(parseDrafts(JSON.stringify([item('WEEK1.pdf')]), 10, names).drafts[0].source).toBe('week1.pdf')
+  })
+  it('drops an unknown or missing source but keeps the question', () => {
+    const r = parseDrafts(JSON.stringify([item('other.pdf'), item(), item(42)]).replace(/Question 1\?/g, (m, o) => `${m}${o}`), 10, names)
+    expect(r.drafts).toHaveLength(3)
+    expect(r.drafts.every((d) => d.source === undefined)).toBe(true)
+  })
+  it('a single uploaded file is always the source', () => {
+    expect(parseDrafts(JSON.stringify([item('nonsense')]), 10, ['only.pdf']).drafts[0].source).toBe('only.pdf')
+  })
+  it('pasted notes never get a source', () => {
+    expect(parseDrafts(JSON.stringify([item('week1.pdf')])).drafts[0]).not.toHaveProperty('source')
+  })
+  it('file sections are labelled and filenames cannot break out of the tag', () => {
+    const notes = buildFileNotes([
+      { name: 'a.pdf', text: 'Alpha' },
+      { name: 'b"><x>.txt', text: 'Beta' },
+    ])
+    expect(notes).toBe('<file name="a.pdf">\nAlpha\n</file>\n\n<file name="bx.txt">\nBeta\n</file>')
+    const body = buildDraftRequest(notes, 3, ['a.pdf', 'b"><x>.txt'])
+    expect(body.system).toContain('Use these names only: "a.pdf", "bx.txt".')
+    expect(body.system).toContain('Cover every file')
   })
 })

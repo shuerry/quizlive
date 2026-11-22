@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  allocateBudget,
   displayName,
   extractPdf,
   extractTxt,
@@ -7,6 +8,7 @@ import {
   MAX_PDF_PAGES,
   MAX_TEXT_CHARS,
   sniffFileType,
+  uniqueNames,
 } from './file-text'
 import { makePdf } from './pdf-fixture'
 
@@ -132,5 +134,28 @@ describe('displayName', () => {
     expect(displayName('a\u0000b.pdf')).toBe('ab.pdf')
     expect(displayName('x'.repeat(200) + '.pdf').length).toBeLessThanOrEqual(80)
     expect(displayName(undefined)).toBe('uploaded file')
+  })
+})
+
+describe('allocateBudget (water-filling)', () => {
+  it('splits evenly when every file is long', () => {
+    expect(allocateBudget([9000, 9000, 9000], 8000)).toEqual([2666, 2667, 2667])
+  })
+  it('a short file keeps everything; its unused share goes to the others', () => {
+    expect(allocateBudget([1000, 9000, 9000], 8000)).toEqual([1000, 3500, 3500])
+    expect(allocateBudget([9000, 500, 700], 8000)).toEqual([6800, 500, 700])
+  })
+  it('never exceeds the total, and gives everything when it all fits', () => {
+    expect(allocateBudget([100, 200, 300], 8000)).toEqual([100, 200, 300])
+    expect(allocateBudget([8000], 8000)).toEqual([8000])
+    for (const lens of [[1, 2, 3], [5000, 5000], [7999, 1, 10_000]]) {
+      expect(allocateBudget(lens, 8000).reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(8000)
+    }
+  })
+})
+
+describe('uniqueNames', () => {
+  it('numbers repeats, case-insensitively', () => {
+    expect(uniqueNames(['a.pdf', 'b.pdf', 'A.pdf', 'a.pdf'])).toEqual(['a.pdf', 'b.pdf', 'A.pdf (2)', 'a.pdf (3)'])
   })
 })

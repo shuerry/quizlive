@@ -6,7 +6,7 @@ import { useQuery } from 'deepspace'
 import { Button, Input, Textarea, cn } from '@/components/ui'
 import { CHOICE_STYLES, ErrorText, Page } from '../../../../components/quiz'
 import type { AnswerKey, Game, Question, Quiz } from '../../../../game/engine'
-import { callQuizAction, draftFromFile, useActionsReady } from '../../../../lib/quiz-client'
+import { callQuizAction, draftFromFiles, useActionsReady } from '../../../../lib/quiz-client'
 
 const TIME_OPTIONS = [10, 20, 30, 45, 60, 90]
 
@@ -25,21 +25,33 @@ interface AiDraft {
   prompt: string
   choices: string[]
   correctIndex: number
-  /** "Source: lecture3.pdf (first 8,000 characters used)" for file drafts. */
+  /** "Source: lecture3.pdf (shortened: first 2,664 characters used)" for file drafts. */
   source?: string
 }
 
+interface UploadSource {
+  name: string
+  chars: number
+  truncated: boolean
+}
+
 interface DraftResponse {
-  drafts: Omit<AiDraft, 'key' | 'source'>[]
+  drafts: (Omit<AiDraft, 'key' | 'source'> & { source?: string })[]
   dropped: number
   remaining: number
-  source?: { name: string; truncated: boolean; pages?: number; pagesRead?: number }
+  sources?: UploadSource[]
 }
 
 const MAX_UPLOAD_MB = 10
+const MAX_FILES = 3
 
-function sourceLabel(src: NonNullable<DraftResponse['source']>): string {
-  return `Source: ${src.name}${src.truncated ? ' (first 8,000 characters used)' : ''}`
+const fmtSize = (b: number) => (b < 1024 * 1024 ? `${Math.max(1, Math.round(b / 1024))} KB` : `${(b / 1024 / 1024).toFixed(1)} MB`)
+
+/** Label for one draft card: which file it came from, and whether that file was shortened. */
+function sourceLabel(name: string | undefined, sources: UploadSource[]): string {
+  const src = sources.find((s) => s.name === name)
+  if (!src) return `Source: not sure which file (${sources.map((s) => s.name).join(', ')})`
+  return `Source: ${src.name}${src.truncated ? ` (shortened: first ${src.chars.toLocaleString()} characters used)` : ''}`
 }
 
 /**
@@ -56,37 +68,46 @@ function AiDraftPanel({ quizId, ready }: { quizId: string; ready: boolean }) {
   const [info, setInfo] = useState('')
   const [drafts, setDrafts] = useState<AiDraft[]>([])
   const [mode, setMode] = useState<'paste' | 'file'>('paste')
-  const [file, setFile] = useState<File | null>(null)
+  const [files, setFiles] = useState<File[]>([])
 
   async function draft(e: FormEvent) {
     e.preventDefault()
     setError('')
     setInfo('')
     if (mode === 'file') {
-      if (!file) return setError('Choose a PDF or .txt file first')
-      // A quick hint only; the server checks the size and the real file type.
-      if (file.size > MAX_UPLOAD_MB * 1024 * 1024) {
-        return setError(`That file is over ${MAX_UPLOAD_MB} MB. Upload a smaller PDF or paste the text.`)
+      // Quick hints only; the server checks the count, sizes and real file types.
+      if (files.length === 0) return setError('Choose up to 3 PDF or .txt files first')
+      if (files.length > MAX_FILES) return setError(`Choose at most ${MAX_FILES} files (you chose ${files.length}).`)
+      const total = files.reduce((n, f) => n + f.size, 0)
+      if (total > MAX_UPLOAD_MB * 1024 * 1024) {
+        return setError(`These files add up to ${fmtSize(total)}, over the ${MAX_UPLOAD_MB} MB limit.`)
       }
     }
     setBusy(true)
     const r =
-      mode === 'file' && file
-        ? await draftFromFile<DraftResponse>(file, quizId, count)
+      mode === 'file'
+        ? await draftFromFiles<DraftResponse>(files, quizId, count)
         : await callQuizAction<DraftResponse>('draftQuestions', { quizId, notes, count })
     setBusy(false)
     if (!r.success) return setError(r.error)
     const stamp = Date.now()
-    const source = r.data.source ? sourceLabel(r.data.source) : undefined
-    setDrafts((prev) => [...prev, ...r.data.drafts.map((d, i) => ({ ...d, source, key: `${stamp}-${i}` }))])
+    const sources = r.data.sources
+    setDrafts((prev) => [
+      ...prev,
+      ...r.data.drafts.map((d, i) => ({ ...d, source: sources ? sourceLabel(d.source, sources) : undefined, key: `${stamp}-${i}` })),
+    ])
+    const shortened = sources?.filter((s) => s.truncated) ?? []
     setInfo(
       `${r.data.drafts.length} draft${r.data.drafts.length === 1 ? '' : 's'} ready to review` +
         (r.data.dropped ? ` (${r.data.dropped} unusable one${r.data.dropped === 1 ? ' was' : 's were'} skipped)` : '') +
-        `. ${r.data.remaining} AI draft${r.data.remaining === 1 ? '' : 's'} left this hour.`,
+        `. ${r.data.remaining} AI draft${r.data.remaining === 1 ? '' : 's'} left this hour.` +
+        (shortened.length
+          ? ` Shortened to fit the 8,000-character limit: ${shortened.map((s) => `${s.name} (first ${s.chars.toLocaleString()} characters)`).join(', ')}.`
+          : ''),
     )
   }
 
-  const canSubmit = mode === 'file' ? !!file : !!notes.trim()
+  const canSubmit = mode === 'file' ? files.length > 0 : !!notes.trim()
 
   const remove = (key: string) => setDrafts((ds) => ds.filter((d) => d.key !== key))
 
@@ -122,7 +143,7 @@ function AiDraftPanel({ quizId, ready }: { quizId: string; ready: boolean }) {
             }}
             className={cn('rounded-md px-3 py-1.5', mode === m ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground')}
           >
-            {m === 'paste' ? 'Paste notes' : 'Upload a file'}
+            {m === 'paste' ? 'Paste notes' : 'Upload files'}
           </button>
         ))}
       </div>
@@ -142,22 +163,27 @@ function AiDraftPanel({ quizId, ready }: { quizId: string; ready: boolean }) {
             <input
               data-testid="ai-file"
               type="file"
-              aria-label="Notes file"
+              aria-label="Notes files"
+              multiple
               accept=".pdf,.txt,application/pdf,text/plain"
               onChange={(e) => {
-                setFile(e.target.files?.[0] ?? null)
+                setFiles(Array.from(e.target.files ?? []))
                 setError('')
               }}
               className="block w-full text-sm file:mr-3 file:rounded-md file:border-0 file:bg-secondary file:px-3 file:py-2 file:text-sm file:font-medium"
             />
             <p className="mt-2 text-xs text-muted-foreground">
-              PDF or .txt, up to {MAX_UPLOAD_MB} MB. The first 8,000 characters are used. The file isn&apos;t stored.
-              Word or PowerPoint? Export it as a PDF first.
+              Up to {MAX_FILES} PDF or .txt files, {MAX_UPLOAD_MB} MB in total. 8,000 characters are used, shared
+              across the files. Files aren&apos;t stored. Word or PowerPoint? Export it as a PDF first.
             </p>
-            {file && (
-              <p data-testid="ai-file-name" className="mt-1 text-sm">
-                {file.name} ({file.size < 1024 * 1024 ? `${Math.max(1, Math.round(file.size / 1024))} KB` : `${(file.size / 1024 / 1024).toFixed(1)} MB`})
-              </p>
+            {files.length > 0 && (
+              <ul data-testid="ai-file-list" className="mt-1 space-y-0.5 text-sm">
+                {files.map((f, i) => (
+                  <li key={`${f.name}-${i}`} data-testid="ai-file-name">
+                    {f.name} ({fmtSize(f.size)})
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
         )}
@@ -181,7 +207,7 @@ function AiDraftPanel({ quizId, ready }: { quizId: string; ready: boolean }) {
           {mode === 'paste' && <span className="text-xs tabular-nums text-muted-foreground">{notes.length}/8000</span>}
         </div>
         <Button data-testid="ai-submit" type="submit" disabled={!ready || !canSubmit || busy} loading={busy}>
-          {busy ? (mode === 'file' ? 'Reading file and drafting…' : 'Drafting…') : 'Draft questions'}
+          {busy ? (mode === 'file' ? `Reading ${files.length === 1 ? 'file' : 'files'} and drafting…` : 'Drafting…') : 'Draft questions'}
         </Button>
       </form>
       <ErrorText>{error}</ErrorText>

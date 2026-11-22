@@ -8,7 +8,9 @@
 
 import { getDocumentProxy } from 'unpdf'
 
+/** Per request, across all files. */
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+export const MAX_FILES = 3
 export const MAX_TEXT_CHARS = 8000
 /** Never walk more pages than this, even if they hold no text (image-only PDFs). */
 export const MAX_PDF_PAGES = 60
@@ -109,7 +111,7 @@ export class ExtractError extends Error {
   }
 }
 
-function cut(text: string, max: number): { text: string; truncated: boolean } {
+export function cutText(text: string, max: number): { text: string; truncated: boolean } {
   if (text.length <= max) return { text, truncated: false }
   // Prefer ending on a word boundary.
   const slice = text.slice(0, max)
@@ -121,7 +123,7 @@ export function extractTxt(bytes: Uint8Array, maxChars = MAX_TEXT_CHARS): Extrac
   const raw = new TextDecoder('utf-8').decode(bytes).replace(/^﻿/, '')
   const text = normalizeText(raw)
   if (!text) throw new ExtractError('empty', 'This text file is empty.')
-  return cut(text, maxChars)
+  return cutText(text, maxChars)
 }
 
 /**
@@ -176,7 +178,7 @@ export async function extractPdf(bytes: Uint8Array, maxChars = MAX_TEXT_CHARS, m
         : 'This PDF has no selectable text (it looks scanned or made of images). Paste the text instead, or upload a PDF exported from the original document.',
     )
   }
-  return { ...cut(text, maxChars), pages: pdf.numPages, pagesRead }
+  return { ...cutText(text, maxChars), pages: pdf.numPages, pagesRead }
 }
 
 /** Strip any path, keep it short, for display only. */
@@ -186,4 +188,33 @@ export function displayName(raw: unknown): string {
   const clean = base.replace(/[\u0000-\u001f\u007f]/g, '').trim()
   if (!clean) return 'uploaded file'
   return clean.length > 80 ? `${clean.slice(0, 60)}…${clean.slice(-15)}` : clean
+}
+
+/**
+ * Share `total` characters across files whose texts have these lengths, as
+ * evenly as possible: a file shorter than its equal share keeps all of its
+ * text, and what it doesn't use is shared among the others ("water-filling").
+ * Every file with text gets something, so none is silently dropped.
+ */
+export function allocateBudget(lengths: number[], total = MAX_TEXT_CHARS): number[] {
+  const out = new Array<number>(lengths.length).fill(0)
+  const order = lengths.map((len, i) => ({ len, i })).sort((a, b) => a.len - b.len)
+  let remaining = total
+  order.forEach(({ len, i }, k) => {
+    const share = Math.floor(remaining / (order.length - k))
+    out[i] = Math.min(len, share)
+    remaining -= out[i]
+  })
+  return out
+}
+
+/** Make display names unique: "notes.pdf", "notes.pdf (2)". */
+export function uniqueNames(names: string[]): string[] {
+  const seen = new Map<string, number>()
+  return names.map((n) => {
+    const k = n.toLowerCase()
+    const c = (seen.get(k) ?? 0) + 1
+    seen.set(k, c)
+    return c === 1 ? n : `${n} (${c})`
+  })
 }

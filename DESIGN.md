@@ -78,10 +78,16 @@ How the table maps onto the SDK (`src/schemas/quiz-schemas.ts`):
 - It runs in the worker, outside the DO lock, using `anthropic/chat-completion` with
   `claude-haiku-5-5`. That integration is billed through DeepSpace to the app owner, so there's no API
   key. Limit: 10 drafts per user per hour. If it fails, the host can still write questions by hand.
-- **From a file:** the host can upload a PDF or .txt (max 10 MB) instead of pasting notes.
+- **From files:** the host can upload up to 3 PDF/.txt files (10 MB in total) instead of pasting notes.
   - The type is taken from the file's bytes, not its name. Word and PowerPoint files are told to export as a PDF.
-  - The text is extracted in the worker (`unpdf` for PDFs), stopping at 8,000 characters and after at
-    most 60 pages. It then goes through the same drafting pipeline, and each draft shows "Source: <file>".
+  - Any bad file (wrong type, scanned, empty or corrupt) rejects the whole request, naming that file,
+    so no file is silently left out.
+  - The text is extracted in the worker (`unpdf` for PDFs, at most 60 pages). The 8,000-character budget is
+    shared "water-filling" style: a short file keeps all its text, and the rest is split evenly among the
+    others.
+  - Each file becomes a `<file name="...">` section of the prompt. It's still one AI call and one rate-limit
+    slot. The model returns a `source` per question, which must be one of the uploaded names, and each draft
+    shows "Source: <file>", noting files that were shortened.
   - Extraction happens before the rate-limit slot is reserved, so an unreadable file costs nothing.
     Scanned, empty and corrupt files get specific messages.
   - The file is never stored. On the deployed worker, a 10 MB, 2,252-page PDF took about 1 s round trip
