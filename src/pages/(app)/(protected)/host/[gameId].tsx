@@ -31,7 +31,8 @@ export default function HostGamePage() {
     if (op === 'endGame' && !window.confirm('End the game for everyone?')) return
     setBusy(op)
     setError('')
-    const r = await callQuizAction(op, { gameId })
+    // timeZone only formats the date in the results email; the server validates it.
+    const r = await callQuizAction(op, { gameId, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone })
     setBusy(null)
     if (!r.success) setError(r.error)
   }
@@ -158,6 +159,7 @@ export default function HostGamePage() {
       {game.state === 'ended' && (
         <section className="mt-6 space-y-8">
           <Podium players={players} />
+          <EmailStatus status={game.resultsEmail} />
           <Leaderboard players={players} limit={50} />
           <Link to="/quizzes" className="block text-center text-sm underline">
             Back to my quizzes
@@ -165,5 +167,24 @@ export default function HostGamePage() {
         </section>
       )}
     </Page>
+  )
+}
+
+function EmailStatus({ status }: { status?: Game['resultsEmail'] }) {
+  const text =
+    status === 'sending'
+      ? 'Emailing the results to you…'
+      : status === 'sent'
+        ? '✉️ Results emailed to your account address.'
+        : status === 'failed'
+          ? "Couldn't email the results. The game ended normally."
+          : status === 'skipped'
+            ? 'No results email: this account has no email address we can send to.'
+            : null
+  if (!text) return null
+  return (
+    <p data-testid="results-email-status" data-status={status} className="text-center text-sm text-muted-foreground">
+      {text}
+    </p>
   )
 }

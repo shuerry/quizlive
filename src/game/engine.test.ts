@@ -295,7 +295,7 @@ describe('reveal and scoring', () => {
     expect(score(P1)).toBe(875)
     expect(score(P2)).toBe(950)
 
-    expect(await ok('nextQuestion', HOST, { gameId })).toEqual({ ended: true })
+    expect(await ok('nextQuestion', HOST, { gameId })).toEqual({ ended: true, emailClaimed: true })
     expect(game(gameId).state).toBe('ended')
   })
 })

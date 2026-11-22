@@ -80,6 +80,8 @@ export interface Game {
   teamId: string
   currentQuestion?: LiveQuestion | null
   answeredCount: number
+  endedAt?: number
+  resultsEmail?: 'sending' | 'sent' | 'failed' | 'skipped' | null
 }
 export interface Player { gameId: string; userId: string; nickname: string; score: number }
 export interface Answer {
@@ -434,19 +436,80 @@ async function nextQuestion(ctx: OpContext) {
   if (game.data.state !== 'reveal') fail('bad_state', 'Reveal the current question first')
   const next = game.data.currentIndex + 1
   const total = (await quizQuestions(ctx, game.data.quizId)).length
-  if (next >= total) {
-    await must(ctx.store.update('games', game.recordId, { state: 'ended' }, ctx.callerId), 'end the game')
-    return { ended: true }
-  }
+  if (next >= total) return finishGame(ctx, game)
   return { ended: false, ...(await beginQuestion(ctx, game, next)) }
 }
 
 async function endGame(ctx: OpContext) {
   const game = await loadHostGame(ctx)
-  if (game.data.state !== 'ended') {
-    await must(ctx.store.update('games', game.recordId, { state: 'ended' }, ctx.callerId), 'end the game')
+  // Retried endGame: already ended, so nothing changes and no second email.
+  if (game.data.state === 'ended') return { ended: true, emailClaimed: false }
+  return finishGame(ctx, game)
+}
+
+/**
+ * The ONE place a game ends (endGame, or nextQuestion past the last
+ * question). Claims the results email in the same write, so exactly one
+ * caller ever sees emailClaimed: true, however often ending is retried.
+ * The send itself happens later, in the worker, outside this lock.
+ */
+async function finishGame(ctx: OpContext, game: Rec<Game>) {
+  const emailClaimed = !game.data.resultsEmail
+  await must(
+    ctx.store.update(
+      'games',
+      game.recordId,
+      { state: 'ended', endedAt: ctx.now(), ...(emailClaimed ? { resultsEmail: 'sending' } : {}) },
+      ctx.callerId,
+    ),
+    'end the game',
+  )
+  return { ended: true, emailClaimed }
+}
+
+/**
+ * INTERNAL: everything the results email needs, read in one consistent
+ * snapshot. Host only. No network, no writes.
+ */
+async function gameResults(ctx: OpContext) {
+  const game = await loadHostGame(ctx)
+  if (game.data.state !== 'ended') fail('bad_state', 'The game has not ended')
+  const gameId = game.recordId
+  const quiz = await ctx.store.get<Quiz>('quizzes', game.data.quizId)
+  const players = await ctx.store.query<Player>('players', { gameId })
+  const answers = await ctx.store.query<Answer>('answers', { gameId })
+  const qs = await quizQuestions(ctx, game.data.quizId)
+  const played = qs.slice(0, Math.max(0, game.data.currentIndex + 1))
+
+  const ranking = players
+    .map((p) => ({ nickname: p.data.nickname, score: p.data.score }))
+    .sort((a, b) => b.score - a.score || a.nickname.localeCompare(b.nickname))
+
+  const questions = []
+  for (const [index, q] of played.entries()) {
+    const [key] = await ctx.store.query<AnswerKey>('answerKeys', { questionId: q.recordId })
+    const forQ = answers.filter((a) => a.data.questionId === q.recordId)
+    const correct = key ? forQ.filter((a) => a.data.choice === key.data.correctIndex).length : 0
+    questions.push({ index, prompt: q.data.prompt, answered: forQ.length, correct, players: players.length })
   }
-  return { ended: true }
+  return {
+    title: quiz?.data.title ?? 'Quiz',
+    code: game.data.code,
+    endedAt: game.data.endedAt ?? ctx.now(),
+    totalQuestions: qs.length,
+    ranking,
+    questions,
+  }
+}
+
+/** INTERNAL: record how the results email went. Only moves on from "sending". */
+async function markResultsEmail(ctx: OpContext) {
+  const game = await loadHostGame(ctx)
+  const status = ctx.params.status
+  if (status !== 'sent' && status !== 'failed' && status !== 'skipped') fail('bad_request', 'Bad status')
+  if (game.data.resultsEmail !== 'sending') return { updated: false, resultsEmail: game.data.resultsEmail ?? null }
+  await must(ctx.store.update('games', game.recordId, { resultsEmail: status }, ctx.callerId), 'record the email status')
+  return { updated: true, resultsEmail: status }
 }
 
 /**
@@ -485,6 +548,8 @@ async function serverTime() {
 export const OPS = {
   serverTime,
   reserveDraft,
+  gameResults,
+  markResultsEmail,
   createQuiz,
   saveQuestion,
   createGame,
@@ -499,7 +564,7 @@ export const OPS = {
 export type OpName = keyof typeof OPS
 export const OP_NAMES = Object.keys(OPS) as OpName[]
 /** Ops only the worker may invoke; never exposed at /api/actions. */
-export const INTERNAL_OPS: readonly OpName[] = ['reserveDraft']
+export const INTERNAL_OPS: readonly OpName[] = ['reserveDraft', 'gameResults', 'markResultsEmail']
 export const PUBLIC_OP_NAMES = OP_NAMES.filter((op) => !INTERNAL_OPS.includes(op))
 
 /** Never throws (a throw inside blockConcurrencyWhile resets the DO). */

@@ -90,9 +90,18 @@ How the table maps onto the SDK (`src/schemas/quiz-schemas.ts`):
 ## Integrations
 - **Auth + real-time records:** the whole game
 - **AI:** drafting questions, which removes the slowest part of hosting a quiz
+- **Email (`email/send`, $0.013 per send, owner-billed):** when a game ends, the host gets a
+  results summary. It includes the final ranking and % correct per question, and flags questions
+  under 50% so the instructor sees what didn't land.
+  - It goes only to the host's own email from their verified JWT claims, never to an address from
+    the request, and test accounts are skipped.
+  - It's sent at most once per game: the op that ends the game claims it inside the DO lock
+    (`games.resultsEmail`), and retries never resend.
+  - It's sent from the worker, outside the lock, with an 8 s timeout. A failure only marks the email
+    `failed`; the game has already ended.
+  - Players never get email; everyone is in the room.
 
-Left out on purpose: payments (nothing to sell), maps (no location), email
-(everyone is in the room at once).
+Left out on purpose: payments (nothing to sell), maps (no location).
 
 ## Main tradeoff
 The server owns time and scoring. This adds a round-trip to every tap and needs

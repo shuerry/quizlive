@@ -147,6 +147,18 @@ export const gamesSchema: CollectionSchema = {
     { name: 'currentQuestion', storage: 'text', interpretation: 'json' },
     /** "12/15 answered": a count only, kept by the answer action. */
     { name: 'answeredCount', storage: 'number', interpretation: 'plain', default: 0 },
+    /** Epoch ms, server clock, when the game reached "ended". */
+    { name: 'endedAt', storage: 'number', interpretation: 'plain' },
+    /**
+     * Results email to the host: claimed ONCE, inside the DO lock, by whichever
+     * op ends the game ("sending"), then set by the worker after the send.
+     * Never holds an address. Unset = not claimed yet.
+     */
+    {
+      name: 'resultsEmail',
+      storage: 'text',
+      interpretation: { kind: 'select', options: ['sending', 'sent', 'failed', 'skipped'] },
+    },
   ],
   uniqueOn: ['code'],
   ownerField: 'hostId',

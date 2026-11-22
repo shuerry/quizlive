@@ -34,7 +34,7 @@ import {
   normalizeApiError,
   splitIntegrationEndpoint,
 } from 'deepspace/worker'
-import type { ActionResult, ActionTools, VerifyResult } from 'deepspace/worker'
+import type { ActionContext, ActionResult, ActionTools, VerifyResult } from 'deepspace/worker'
 import { actions } from '../actions/index.js'
 import { integrations } from '../integrations.js'
 import type { AppContext, Env } from '../../worker.js'
@@ -64,7 +64,17 @@ export function registerActionRoutes(app: Hono<AppContext>, resolveAuth: Resolve
     if (!action) return c.json({ error: 'Action not found' }, 404)
     const params = await c.req.json<Record<string, unknown>>()
     const tools = createActionTools(c.env, auth.userId, callerJwt)
-    const result = await action({ userId: auth.userId, params, tools, env: c.env, callerJwt })
+    // QuizLive: also hand actions the VERIFIED claims (e.g. the caller's account
+    // email for the results email). Never derived from the request body.
+    const ctx: ActionContext<Env> & { claims: VerifyResult['claims'] } = {
+      userId: auth.userId,
+      params,
+      tools,
+      env: c.env,
+      callerJwt,
+      claims: auth.claims,
+    }
+    const result = await action(ctx)
     return c.json(result as unknown as Record<string, unknown>)
   })
 }
